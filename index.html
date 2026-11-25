@@ -84,9 +84,10 @@
           <input type="text" id="fsuName" placeholder="e.g., Nellore Mc" required>
         </div>
 
-        <div class="full">
+        <div class="full autocomplete-wrap">
           <label for="inspectionOf">Inspection Of (Name & Designation) *</label>
-          <input type="text" id="inspectionOf" placeholder="e.g., A Vinay, SE" required>
+          <input type="text" id="inspectionOf" placeholder="Type name to search or enter manually (e.g., A Vinay, SE)" disabled required>
+          <div id="inspectedSuggestions" class="suggestions"></div>
         </div>
 
         <div class="full">
@@ -106,10 +107,11 @@
     const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw77ls45VeZmnE403BRJdkdNx4YN_RvcCdfpE1ulPHBezdwnLGYV_mOEL49hHcF_3xU/exec';
     const MAX_FILE_SIZE = 7 * 1024 * 1024; // 7 MB
 
-    let activeEmployees = [];
+    let inspectingOfficers = [];
+    let allActiveStaff = [];
     let selectedEmployee = null;
 
-    function isAllowedDesignation(rawDesig) {
+    function isAllowedInspectingOfficer(rawDesig) {
       const d = String(rawDesig || '').trim().toLowerCase().replace(/\./g, '');
       return (
         d.includes('senior statistical officer') ||
@@ -121,8 +123,14 @@
       );
     }
 
+    function isActiveStatus(rawStatus) {
+      const s = String(rawStatus || 'active').trim().toLowerCase();
+      return s === 'active' || s === 'yes';
+    }
+
     async function loadMasterData() {
       const searchInput = document.getElementById('officerSearch');
+      const inspectedInput = document.getElementById('inspectionOf');
       const hintDiv = document.getElementById('officerHint');
       const schemeSelect = document.getElementById('scheme');
       const submitBtn = document.getElementById('submitBtn');
@@ -133,13 +141,9 @@
         const json = await res.json();
         if (json.status !== 'success') throw new Error(json.message);
 
-        const rawEmployees = json.employees || [];
-        activeEmployees = rawEmployees
-          .filter(e => {
-            const name = String(e.name || '').trim();
-            const status = String(e.status || 'active').trim().toLowerCase();
-            return name !== '' && status !== 'inactive' && isAllowedDesignation(e.designation);
-          })
+        // All active staff (used for "Inspection Of")
+        allActiveStaff = (json.employees || [])
+          .filter(e => String(e.name || '').trim() !== '' && isActiveStatus(e.status))
           .map(e => ({
             name: String(e.name || '').trim(),
             designation: String(e.designation || '').trim(),
@@ -147,20 +151,22 @@
           }))
           .sort((a, b) => a.name.localeCompare(b.name));
 
+        // Only Active SSO & Survey Supervisor (used for "Name of Inspecting Officer")
+        inspectingOfficers = allActiveStaff.filter(e => isAllowedInspectingOfficer(e.designation));
+
         searchInput.disabled = false;
-        searchInput.placeholder = activeEmployees.length
+        searchInput.placeholder = inspectingOfficers.length
           ? 'Type officer name to search...'
           : 'No matching officers found';
 
-        if (activeEmployees.length === 0) {
-          hintDiv.style.color = '#c5221f';
-          hintDiv.textContent = `Loaded ${rawEmployees.length} row(s) from ROEmployees, but 0 matched Active SSO / Survey Supervisor. Check column order (ID | Name | Designation | SRO | Status).`;
-        } else {
-          hintDiv.textContent = `Type to filter (${activeEmployees.length} active officers loaded) and click a name.`;
-        }
+        hintDiv.textContent = inspectingOfficers.length
+          ? `Type to filter (${inspectingOfficers.length} active inspecting officers) and click a name.`
+          : 'No Active SSO / Survey Supervisor found in ROEmployees.';
+
+        inspectedInput.disabled = false;
 
         const activeSchemes = (json.schemes || [])
-          .filter(s => String(s.name || '').trim() !== '' && String(s.status || 'active').trim().toLowerCase() !== 'inactive')
+          .filter(s => String(s.name || '').trim() !== '' && isActiveStatus(s.status))
           .sort((a, b) => String(a.name).trim().localeCompare(String(b.name).trim()));
 
         schemeSelect.innerHTML = '<option value="">-- Select Scheme --</option>' +
@@ -175,56 +181,103 @@
       }
     }
 
-    // Type-to-filter autocomplete logic
+    // --- Autocomplete 1: Name of Inspecting Officer ---
     const officerInput = document.getElementById('officerSearch');
-    const suggestionsBox = document.getElementById('officerSuggestions');
+    const officerSuggestions = document.getElementById('officerSuggestions');
 
-    function renderSuggestions(query) {
+    function renderOfficerSuggestions(query) {
       const q = query.trim().toLowerCase();
       const matches = q
-        ? activeEmployees.filter(e => e.name.toLowerCase().includes(q))
-        : activeEmployees.slice(0, 15);
+        ? inspectingOfficers.filter(e => e.name.toLowerCase().includes(q))
+        : inspectingOfficers.slice(0, 15);
 
-      if (!matches.length) {
-        suggestionsBox.innerHTML = '<div class="suggestion-item" style="color:#888; cursor:default;">No matching officer found</div>';
-      } else {
-        suggestionsBox.innerHTML = matches.map(emp => `
-          <div class="suggestion-item" data-name="${emp.name.replace(/"/g, '&quot;')}">
-            <strong>${emp.name}</strong>
-            <span class="suggestion-meta">${emp.designation} — ${emp.sro}</span>
-          </div>
-        `).join('');
-      }
-      suggestionsBox.style.display = 'block';
+      officerSuggestions.innerHTML = matches.length
+        ? matches.map(emp => `
+            <div class="suggestion-item" data-name="${emp.name.replace(/"/g, '&quot;')}">
+              <strong>${emp.name}</strong>
+              <span class="suggestion-meta">${emp.designation} — ${emp.sro}</span>
+            </div>
+          `).join('')
+        : '<div class="suggestion-item" style="color:#888; cursor:default;">No matching officer found</div>';
+      officerSuggestions.style.display = 'block';
     }
 
     officerInput.addEventListener('input', function() {
       selectedEmployee = null;
       document.getElementById('designation').value = '';
       document.getElementById('sro').value = '';
-      renderSuggestions(this.value);
+      renderOfficerSuggestions(this.value);
     });
 
     officerInput.addEventListener('focus', function() {
-      if (activeEmployees.length) renderSuggestions(this.value);
+      if (inspectingOfficers.length) renderOfficerSuggestions(this.value);
     });
 
-    suggestionsBox.addEventListener('click', function(e) {
+    officerSuggestions.addEventListener('click', function(e) {
       const item = e.target.closest('.suggestion-item');
       if (!item || !item.dataset.name) return;
-      const emp = activeEmployees.find(x => x.name === item.dataset.name);
+      const emp = inspectingOfficers.find(x => x.name === item.dataset.name);
       if (!emp) return;
 
       selectedEmployee = emp;
       officerInput.value = emp.name;
       document.getElementById('designation').value = emp.designation;
       document.getElementById('sro').value = emp.sro;
-      suggestionsBox.style.display = 'none';
+      officerSuggestions.style.display = 'none';
     });
 
+    // --- Autocomplete 2: Inspection Of (All Active Staff) ---
+    const inspectedInput = document.getElementById('inspectionOf');
+    const inspectedSuggestions = document.getElementById('inspectedSuggestions');
+
+    function renderInspectedSuggestions(query) {
+      const q = query.trim().toLowerCase();
+      const matches = q
+        ? allActiveStaff.filter(e =>
+            e.name.toLowerCase().includes(q) ||
+            e.designation.toLowerCase().includes(q)
+          ).slice(0, 20)
+        : allActiveStaff.slice(0, 15);
+
+      if (!matches.length) {
+        inspectedSuggestions.style.display = 'none';
+        return;
+      }
+
+      inspectedSuggestions.innerHTML = matches.map(emp => {
+        const displayVal = emp.designation ? `${emp.name}, ${emp.designation}` : emp.name;
+        return `
+          <div class="suggestion-item" data-val="${displayVal.replace(/"/g, '&quot;')}">
+            <strong>${emp.name}</strong>
+            <span class="suggestion-meta">${emp.designation} — ${emp.sro}</span>
+          </div>
+        `;
+      }).join('');
+      inspectedSuggestions.style.display = 'block';
+    }
+
+    inspectedInput.addEventListener('input', function() {
+      renderInspectedSuggestions(this.value);
+    });
+
+    inspectedInput.addEventListener('focus', function() {
+      if (allActiveStaff.length) renderInspectedSuggestions(this.value);
+    });
+
+    inspectedSuggestions.addEventListener('click', function(e) {
+      const item = e.target.closest('.suggestion-item');
+      if (!item || !item.dataset.val) return;
+      inspectedInput.value = item.dataset.val;
+      inspectedSuggestions.style.display = 'none';
+    });
+
+    // Close dropdowns when clicking outside
     document.addEventListener('click', function(e) {
-      if (!e.target.closest('.autocomplete-wrap')) {
-        suggestionsBox.style.display = 'none';
+      if (!e.target.closest('#officerSearch') && !e.target.closest('#officerSuggestions')) {
+        officerSuggestions.style.display = 'none';
+      }
+      if (!e.target.closest('#inspectionOf') && !e.target.closest('#inspectedSuggestions')) {
+        inspectedSuggestions.style.display = 'none';
       }
     });
 
@@ -263,7 +316,7 @@
 
       if (!selectedEmployee) {
         statusDiv.className = 'error';
-        statusDiv.textContent = 'Please select a valid officer name from the dropdown suggestions.';
+        statusDiv.textContent = 'Please select a valid inspecting officer from the suggestions.';
         statusDiv.style.display = 'block';
         officerInput.focus();
         return;
@@ -293,7 +346,7 @@
           scheme: document.getElementById('scheme').value,
           fsuNo: document.getElementById('fsuNo').value.trim(),
           fsuName: document.getElementById('fsuName').value.trim(),
-          inspectionOf: document.getElementById('inspectionOf').value.trim(),
+          inspectionOf: inspectedInput.value.trim(),
           dateOfInspection: formatDateDDMMYYYY(document.getElementById('dateOfInspection').value),
           fileName: file.name,
           mimeType: 'application/pdf',
