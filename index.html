@@ -22,6 +22,19 @@
     #status { margin-top: 15px; padding: 12px; border-radius: 5px; display: none; font-size: 0.92rem; }
     .success { background: #e6f4ea; color: #137333; border: 1px solid #ceead6; }
     .error { background: #fce8e6; color: #c5221f; border: 1px solid #fad2cf; }
+
+    /* Searchable Autocomplete Dropdown */
+    .autocomplete-wrap { position: relative; }
+    .suggestions {
+      position: absolute; top: 100%; left: 0; right: 0; z-index: 1000;
+      background: #fff; border: 1px solid var(--border); border-top: none;
+      border-radius: 0 0 6px 6px; max-height: 220px; overflow-y: auto;
+      box-shadow: 0 6px 14px rgba(0,0,0,0.1); display: none;
+    }
+    .suggestion-item { padding: 9px 12px; cursor: pointer; border-bottom: 1px solid #f1f5f9; font-size: 0.92rem; }
+    .suggestion-item:hover { background: #eef4fc; }
+    .suggestion-meta { font-size: 0.78rem; color: #64748b; display: block; margin-top: 2px; }
+
     @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } .full { grid-column: span 1; } }
   </style>
 </head>
@@ -30,13 +43,13 @@
     <h2>NSO (FOD) Regional Office Kadapa</h2>
     <div class="subtitle">Inspection Note Submission Portal</div>
 
-    <form id="inspectionForm">
+    <form id="inspectionForm" autocomplete="off">
       <div class="grid">
-        <div class="full">
-          <label for="officerName">Name of Inspecting Officer *</label>
-          <select id="officerName" required disabled>
-            <option value="">Loading active officers...</option>
-          </select>
+        <div class="full autocomplete-wrap">
+          <label for="officerSearch">Name of Inspecting Officer *</label>
+          <input type="text" id="officerSearch" placeholder="Loading active officers..." disabled required>
+          <div id="officerSuggestions" class="suggestions"></div>
+          <div id="officerHint" class="note"></div>
         </div>
 
         <div>
@@ -94,10 +107,23 @@
     const MAX_FILE_SIZE = 7 * 1024 * 1024; // 7 MB
 
     let activeEmployees = [];
+    let selectedEmployee = null;
 
-    // Load Active Employees (SSO & Survey Supervisor only) & Schemes on page load
+    function isAllowedDesignation(rawDesig) {
+      const d = String(rawDesig || '').trim().toLowerCase().replace(/\./g, '');
+      return (
+        d.includes('senior statistical officer') ||
+        d.includes('sr statistical officer') ||
+        /\bsso\b/.test(d) ||
+        d.includes('survey supervisor') ||
+        d.includes('survey sup') ||
+        /\bss\b/.test(d)
+      );
+    }
+
     async function loadMasterData() {
-      const empSelect = document.getElementById('officerName');
+      const searchInput = document.getElementById('officerSearch');
+      const hintDiv = document.getElementById('officerHint');
       const schemeSelect = document.getElementById('scheme');
       const submitBtn = document.getElementById('submitBtn');
       const statusDiv = document.getElementById('status');
@@ -107,25 +133,34 @@
         const json = await res.json();
         if (json.status !== 'success') throw new Error(json.message);
 
-        activeEmployees = (json.employees || [])
+        const rawEmployees = json.employees || [];
+        activeEmployees = rawEmployees
           .filter(e => {
             const name = String(e.name || '').trim();
             const status = String(e.status || 'active').trim().toLowerCase();
-            const desig = String(e.designation || '').trim().toLowerCase();
-            const isAllowedDesig =
-              desig.includes('senior statistical officer') ||
-              desig === 'sso' ||
-              desig.includes('survey supervisor');
-            return name !== '' && status === 'active' && isAllowedDesig;
+            return name !== '' && status !== 'inactive' && isAllowedDesignation(e.designation);
           })
-          .sort((a, b) => String(a.name).trim().localeCompare(String(b.name).trim()));
+          .map(e => ({
+            name: String(e.name || '').trim(),
+            designation: String(e.designation || '').trim(),
+            sro: String(e.sro || '').trim()
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name));
 
-        empSelect.innerHTML = '<option value="">-- Select Officer Name --</option>' +
-          activeEmployees.map((e, idx) => `<option value="${idx}">${String(e.name).trim()}</option>`).join('');
-        empSelect.disabled = false;
+        searchInput.disabled = false;
+        searchInput.placeholder = activeEmployees.length
+          ? 'Type officer name to search...'
+          : 'No matching officers found';
+
+        if (activeEmployees.length === 0) {
+          hintDiv.style.color = '#c5221f';
+          hintDiv.textContent = `Loaded ${rawEmployees.length} row(s) from ROEmployees, but 0 matched Active SSO / Survey Supervisor. Check column order (ID | Name | Designation | SRO | Status).`;
+        } else {
+          hintDiv.textContent = `Type to filter (${activeEmployees.length} active officers loaded) and click a name.`;
+        }
 
         const activeSchemes = (json.schemes || [])
-          .filter(s => String(s.name || '').trim() !== '' && String(s.status || 'active').trim().toLowerCase() === 'active')
+          .filter(s => String(s.name || '').trim() !== '' && String(s.status || 'active').trim().toLowerCase() !== 'inactive')
           .sort((a, b) => String(a.name).trim().localeCompare(String(b.name).trim()));
 
         schemeSelect.innerHTML = '<option value="">-- Select Scheme --</option>' +
@@ -140,17 +175,57 @@
       }
     }
 
-    // Auto-fill Designation & SRO when officer is selected
-    document.getElementById('officerName').addEventListener('change', function() {
-      const idx = this.value;
-      if (idx === '') {
-        document.getElementById('designation').value = '';
-        document.getElementById('sro').value = '';
-        return;
+    // Type-to-filter autocomplete logic
+    const officerInput = document.getElementById('officerSearch');
+    const suggestionsBox = document.getElementById('officerSuggestions');
+
+    function renderSuggestions(query) {
+      const q = query.trim().toLowerCase();
+      const matches = q
+        ? activeEmployees.filter(e => e.name.toLowerCase().includes(q))
+        : activeEmployees.slice(0, 15);
+
+      if (!matches.length) {
+        suggestionsBox.innerHTML = '<div class="suggestion-item" style="color:#888; cursor:default;">No matching officer found</div>';
+      } else {
+        suggestionsBox.innerHTML = matches.map(emp => `
+          <div class="suggestion-item" data-name="${emp.name.replace(/"/g, '&quot;')}">
+            <strong>${emp.name}</strong>
+            <span class="suggestion-meta">${emp.designation} — ${emp.sro}</span>
+          </div>
+        `).join('');
       }
-      const emp = activeEmployees[Number(idx)];
-      document.getElementById('designation').value = String(emp.designation || '').trim();
-      document.getElementById('sro').value = String(emp.sro || '').trim();
+      suggestionsBox.style.display = 'block';
+    }
+
+    officerInput.addEventListener('input', function() {
+      selectedEmployee = null;
+      document.getElementById('designation').value = '';
+      document.getElementById('sro').value = '';
+      renderSuggestions(this.value);
+    });
+
+    officerInput.addEventListener('focus', function() {
+      if (activeEmployees.length) renderSuggestions(this.value);
+    });
+
+    suggestionsBox.addEventListener('click', function(e) {
+      const item = e.target.closest('.suggestion-item');
+      if (!item || !item.dataset.name) return;
+      const emp = activeEmployees.find(x => x.name === item.dataset.name);
+      if (!emp) return;
+
+      selectedEmployee = emp;
+      officerInput.value = emp.name;
+      document.getElementById('designation').value = emp.designation;
+      document.getElementById('sro').value = emp.sro;
+      suggestionsBox.style.display = 'none';
+    });
+
+    document.addEventListener('click', function(e) {
+      if (!e.target.closest('.autocomplete-wrap')) {
+        suggestionsBox.style.display = 'none';
+      }
     });
 
     function validatePdfFile(file) {
@@ -161,7 +236,6 @@
       return null;
     }
 
-    // Instant check when user picks a file
     document.getElementById('reportFile').addEventListener('change', function() {
       const statusDiv = document.getElementById('status');
       const errorMsg = validatePdfFile(this.files[0]);
@@ -187,6 +261,14 @@
       const statusDiv = document.getElementById('status');
       const file = document.getElementById('reportFile').files[0];
 
+      if (!selectedEmployee) {
+        statusDiv.className = 'error';
+        statusDiv.textContent = 'Please select a valid officer name from the dropdown suggestions.';
+        statusDiv.style.display = 'block';
+        officerInput.focus();
+        return;
+      }
+
       const fileError = validatePdfFile(file);
       if (fileError) {
         statusDiv.className = 'error';
@@ -194,9 +276,6 @@
         statusDiv.style.display = 'block';
         return;
       }
-
-      const empIdx = document.getElementById('officerName').value;
-      const selectedEmp = activeEmployees[Number(empIdx)];
 
       btn.disabled = true;
       btn.textContent = 'Uploading & Saving... Please wait';
@@ -208,9 +287,9 @@
 
         const payload = {
           action: 'submitReport',
-          officerName: String(selectedEmp.name || '').trim(),
-          designation: String(selectedEmp.designation || '').trim(),
-          sro: String(selectedEmp.sro || '').trim(),
+          officerName: selectedEmployee.name,
+          designation: selectedEmployee.designation,
+          sro: selectedEmployee.sro,
           scheme: document.getElementById('scheme').value,
           fsuNo: document.getElementById('fsuNo').value.trim(),
           fsuName: document.getElementById('fsuName').value.trim(),
@@ -233,6 +312,7 @@
             statusDiv.className = 'success';
             statusDiv.innerHTML = `<strong>Submitted Successfully!</strong> Inspection note for FSU ${payload.fsuNo} recorded on ${result.submittedOn}.`;
             document.getElementById('inspectionForm').reset();
+            selectedEmployee = null;
             document.getElementById('designation').value = '';
             document.getElementById('sro').value = '';
           } else {
@@ -250,7 +330,6 @@
       reader.readAsDataURL(file);
     });
 
-    // Prevent future dates for Date of Inspection
     document.getElementById('dateOfInspection').max = new Date().toISOString().split('T')[0];
 
     loadMasterData();
