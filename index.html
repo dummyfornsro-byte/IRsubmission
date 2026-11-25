@@ -95,7 +95,7 @@
 
     let activeEmployees = [];
 
-    // Load Active Employees & Schemes on page load
+    // Load Active Employees (SSO & Survey Supervisor only) & Schemes on page load
     async function loadMasterData() {
       const empSelect = document.getElementById('officerName');
       const schemeSelect = document.getElementById('scheme');
@@ -108,19 +108,28 @@
         if (json.status !== 'success') throw new Error(json.message);
 
         activeEmployees = (json.employees || [])
-          .filter(e => String(e.status).toLowerCase() === 'active')
-          .sort((a, b) => a.name.localeCompare(b.name));
+          .filter(e => {
+            const name = String(e.name || '').trim();
+            const status = String(e.status || 'active').trim().toLowerCase();
+            const desig = String(e.designation || '').trim().toLowerCase();
+            const isAllowedDesig =
+              desig.includes('senior statistical officer') ||
+              desig === 'sso' ||
+              desig.includes('survey supervisor');
+            return name !== '' && status === 'active' && isAllowedDesig;
+          })
+          .sort((a, b) => String(a.name).trim().localeCompare(String(b.name).trim()));
 
         empSelect.innerHTML = '<option value="">-- Select Officer Name --</option>' +
-          activeEmployees.map((e, idx) => `<option value="${idx}">${e.name}</option>`).join('');
+          activeEmployees.map((e, idx) => `<option value="${idx}">${String(e.name).trim()}</option>`).join('');
         empSelect.disabled = false;
 
         const activeSchemes = (json.schemes || [])
-          .filter(s => String(s.status).toLowerCase() === 'active')
-          .sort((a, b) => a.name.localeCompare(b.name));
+          .filter(s => String(s.name || '').trim() !== '' && String(s.status || 'active').trim().toLowerCase() === 'active')
+          .sort((a, b) => String(a.name).trim().localeCompare(String(b.name).trim()));
 
         schemeSelect.innerHTML = '<option value="">-- Select Scheme --</option>' +
-          activeSchemes.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+          activeSchemes.map(s => `<option value="${String(s.name).trim()}">${String(s.name).trim()}</option>`).join('');
         schemeSelect.disabled = false;
 
         submitBtn.disabled = false;
@@ -140,8 +149,8 @@
         return;
       }
       const emp = activeEmployees[Number(idx)];
-      document.getElementById('designation').value = emp.designation || '';
-      document.getElementById('sro').value = emp.sro || '';
+      document.getElementById('designation').value = String(emp.designation || '').trim();
+      document.getElementById('sro').value = String(emp.sro || '').trim();
     });
 
     function validatePdfFile(file) {
@@ -199,9 +208,9 @@
 
         const payload = {
           action: 'submitReport',
-          officerName: selectedEmp.name,
-          designation: selectedEmp.designation,
-          sro: selectedEmp.sro,
+          officerName: String(selectedEmp.name || '').trim(),
+          designation: String(selectedEmp.designation || '').trim(),
+          sro: String(selectedEmp.sro || '').trim(),
           scheme: document.getElementById('scheme').value,
           fsuNo: document.getElementById('fsuNo').value.trim(),
           fsuName: document.getElementById('fsuName').value.trim(),
