@@ -77,9 +77,9 @@
         </div>
 
         <div class="full">
-          <label for="reportFile">Upload Inspection Note (PDF / JPG / PNG, Max 5MB) *</label>
-          <input type="file" id="reportFile" accept=".pdf,.jpg,.jpeg,.png" required>
-          <div class="note">Note: Submission date is automatically recorded from the server timestamp upon upload.</div>
+          <label for="reportFile">Upload Inspection Note (PDF Only, Max 7MB) *</label>
+          <input type="file" id="reportFile" accept="application/pdf,.pdf" required>
+          <div class="note">Only PDF files up to 7 MB are allowed. Submission date is automatically recorded from the server timestamp.</div>
         </div>
       </div>
 
@@ -90,7 +90,8 @@
   </div>
 
   <script>
-    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwHdcuRjBfqDLFWVEjyWDRW8QnuUnBmQ-cT3cCDTXAAhdsNA620FS_hG731_2ytU_pm/exec';
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw77ls45VeZmnE403BRJdkdNx4YN_RvcCdfpE1ulPHBezdwnLGYV_mOEL49hHcF_3xU/exec';
+    const MAX_FILE_SIZE = 7 * 1024 * 1024; // 7 MB
 
     let activeEmployees = [];
 
@@ -106,7 +107,6 @@
         const json = await res.json();
         if (json.status !== 'success') throw new Error(json.message);
 
-        // Filter only Active employees and sort alphabetically
         activeEmployees = (json.employees || [])
           .filter(e => String(e.status).toLowerCase() === 'active')
           .sort((a, b) => a.name.localeCompare(b.name));
@@ -115,7 +115,6 @@
           activeEmployees.map((e, idx) => `<option value="${idx}">${e.name}</option>`).join('');
         empSelect.disabled = false;
 
-        // Filter only Active schemes and sort alphabetically
         const activeSchemes = (json.schemes || [])
           .filter(s => String(s.status).toLowerCase() === 'active')
           .sort((a, b) => a.name.localeCompare(b.name));
@@ -132,7 +131,7 @@
       }
     }
 
-    // Auto-fill Designation & SRO when an officer is selected
+    // Auto-fill Designation & SRO when officer is selected
     document.getElementById('officerName').addEventListener('change', function() {
       const idx = this.value;
       if (idx === '') {
@@ -143,6 +142,28 @@
       const emp = activeEmployees[Number(idx)];
       document.getElementById('designation').value = emp.designation || '';
       document.getElementById('sro').value = emp.sro || '';
+    });
+
+    function validatePdfFile(file) {
+      if (!file) return 'Please select a PDF file.';
+      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+      if (!isPdf) return 'Only PDF (.pdf) files are allowed.';
+      if (file.size > MAX_FILE_SIZE) return 'File size exceeds 7 MB limit. Please compress the PDF and try again.';
+      return null;
+    }
+
+    // Instant check when user picks a file
+    document.getElementById('reportFile').addEventListener('change', function() {
+      const statusDiv = document.getElementById('status');
+      const errorMsg = validatePdfFile(this.files[0]);
+      if (errorMsg) {
+        statusDiv.className = 'error';
+        statusDiv.textContent = errorMsg;
+        statusDiv.style.display = 'block';
+        this.value = '';
+      } else {
+        statusDiv.style.display = 'none';
+      }
     });
 
     function formatDateDDMMYYYY(isoDate) {
@@ -157,10 +178,10 @@
       const statusDiv = document.getElementById('status');
       const file = document.getElementById('reportFile').files[0];
 
-      if (!file) return;
-      if (file.size > 5 * 1024 * 1024) {
+      const fileError = validatePdfFile(file);
+      if (fileError) {
         statusDiv.className = 'error';
-        statusDiv.textContent = 'File size exceeds 5MB limit. Please compress the PDF/image and try again.';
+        statusDiv.textContent = fileError;
         statusDiv.style.display = 'block';
         return;
       }
@@ -187,7 +208,7 @@
           inspectionOf: document.getElementById('inspectionOf').value.trim(),
           dateOfInspection: formatDateDDMMYYYY(document.getElementById('dateOfInspection').value),
           fileName: file.name,
-          mimeType: file.type,
+          mimeType: 'application/pdf',
           fileData: base64Data
         };
 
@@ -201,7 +222,7 @@
 
           if (result.status === 'success') {
             statusDiv.className = 'success';
-            statusDiv.innerHTML = `<strong>Submitted Successfully!</strong> Inspection note for FSU ${payload.fsuNo} recorded.`;
+            statusDiv.innerHTML = `<strong>Submitted Successfully!</strong> Inspection note for FSU ${payload.fsuNo} recorded on ${result.submittedOn}.`;
             document.getElementById('inspectionForm').reset();
             document.getElementById('designation').value = '';
             document.getElementById('sro').value = '';
